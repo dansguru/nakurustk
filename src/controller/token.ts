@@ -63,8 +63,40 @@ const stkPush = async (req: Request, res: Response) => {
             return res.status(500).json({ error: "M-Pesa configuration incomplete" });
         }
 
-        // Remove leading 0 if present
-        const phoneNumber = phone.startsWith("0") ? phone.substring(1) : phone;
+        // FIXED: Proper phone formatting
+        let formattedPhone = phone;
+
+        // Remove all non-digits first
+        formattedPhone = formattedPhone.replace(/\D/g, '');
+
+        // Now format correctly for M-Pesa
+        if (formattedPhone.startsWith('0')) {
+            // Format: 0745342479 -> 254745342479
+            formattedPhone = '254' + formattedPhone.substring(1);
+        } else if (formattedPhone.startsWith('254')) {
+            // Already in correct format: 254745342479
+            // Do nothing, it's already correct
+            formattedPhone = formattedPhone;
+        } else if (formattedPhone.length === 9) {
+            // Format: 745342479 -> 254745342479
+            formattedPhone = '254' + formattedPhone;
+        } else {
+            console.error("❌ Invalid phone number:", phone);
+            return res.status(400).json({
+                error: "Invalid phone number format. Use: 0745342479 or 745342479 or 254745342479"
+            });
+        }
+
+        // Final validation
+        if (formattedPhone.length !== 12) {
+            console.error("❌ Invalid phone length:", formattedPhone);
+            return res.status(400).json({
+                error: "Invalid phone number. Should be 12 digits (e.g., 254745342479)"
+            });
+        }
+
+        console.log("📱 Formatted phone for M-Pesa:", formattedPhone);
+
         const url = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest";
 
         const date = new Date();
@@ -76,9 +108,7 @@ const stkPush = async (req: Request, res: Response) => {
             ("0" + date.getMinutes()).slice(-2) +
             ("0" + date.getSeconds()).slice(-2);
 
-        const password = Buffer.from(shortCode + passkey + timestamp).toString(
-            "base64"
-        );
+        const password = Buffer.from(shortCode + passkey + timestamp).toString("base64");
 
         // Create account reference with bookingId if available
         const accountReference = bookingId
@@ -91,18 +121,19 @@ const stkPush = async (req: Request, res: Response) => {
             Timestamp: timestamp,
             TransactionType: "CustomerPayBillOnline",
             Amount: amount,
-            PartyA: `254${phoneNumber}`,
+            PartyA: formattedPhone,  // Use the formatted phone
             PartyB: shortCode,
-            PhoneNumber: `254${phoneNumber}`,
+            PhoneNumber: formattedPhone,  // Use the formatted phone
             CallBackURL: callbackUrl,
             AccountReference: accountReference,
             TransactionDesc: "Vehicle Booking Payment",
         };
 
         console.log("📱 Sending STK Push request...", {
-            phone: `254${phoneNumber}`,
+            phone: formattedPhone,
             amount,
-            bookingId
+            bookingId,
+            timestamp
         });
 
         const response = await axios.post(url, stkPushData, {
@@ -122,7 +153,7 @@ const stkPush = async (req: Request, res: Response) => {
         if (stkResponse.CheckoutRequestID) {
             await saveTransaction(stkResponse.CheckoutRequestID, {
                 checkoutRequestID: stkResponse.CheckoutRequestID,
-                phone: `254${phoneNumber}`,
+                phone: formattedPhone,
                 amount,
                 bookingId: bookingId || null,
                 status: "pending",
@@ -135,13 +166,23 @@ const stkPush = async (req: Request, res: Response) => {
         res.status(200).json(stkResponse);
     } catch (err) {
         console.error("❌ STK Push failed:", err);
+
+        // Better error logging
+        if (err.response?.data) {
+            console.error("❌ M-Pesa API Error:", err.response.data);
+            return res.status(400).json({
+                error: "Failed to initiate STK Push",
+                details: err.response.data.errorMessage || JSON.stringify(err.response.data),
+                mpesaErrorCode: err.response.data.errorCode
+            });
+        }
+
         res.status(400).json({
             error: "Failed to initiate STK Push",
             details: err instanceof Error ? err.message : "Unknown error"
         });
     }
 };
-
 // Handle M-Pesa callback from Safaricom
 const handleCallback = async (req: Request, res: Response) => {
     try {
