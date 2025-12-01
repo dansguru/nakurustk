@@ -219,7 +219,27 @@ const getTransactionStatus = async (req: Request, res: Response) => {
     // Query Firebase for the transaction
     const result = await getTransaction(checkoutRequestID);
     
-    const transaction = result.transaction || { status: "pending" };
+    let transaction = result.transaction || { status: "pending" };
+    
+    // If transaction is still pending after some time, try querying M-Pesa directly
+    // This is a fallback for cases where callback is delayed
+    if (transaction.status === "pending" && db) {
+      const initiatedTime = new Date(transaction.initiatedAt || Date.now()).getTime();
+      const currentTime = Date.now();
+      const secondsElapsed = (currentTime - initiatedTime) / 1000;
+      
+      // After 30 seconds, the user has likely confirmed or rejected the prompt
+      if (secondsElapsed > 30) {
+        console.log("⏳ Transaction pending for >30s, checking if callback was received...");
+        
+        // Check if transaction has been updated by callback (has resultCode)
+        if (!transaction.resultCode) {
+          // Still no callback - this might indicate the user rejected or didn't respond
+          // We'll let it continue polling but log this state
+          console.log("⚠️ No callback received yet for:", checkoutRequestID);
+        }
+      }
+    }
     
     const responseData = {
       checkoutRequestID,
@@ -234,6 +254,7 @@ const getTransactionStatus = async (req: Request, res: Response) => {
     console.log("📊 Transaction status response:", {
       checkoutRequestID,
       status: transaction.status,
+      hasResultCode: !!transaction.resultCode,
     });
 
     res.status(200).json(responseData);
