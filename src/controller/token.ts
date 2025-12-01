@@ -221,9 +221,8 @@ const getTransactionStatus = async (req: Request, res: Response) => {
     
     let transaction = result.transaction || { status: "pending" };
     
-    // If transaction is still pending after some time, try querying M-Pesa directly
-    // This is a fallback for cases where callback is delayed
-    if (transaction.status === "pending" && db) {
+    // If transaction is still pending after some time, provide helpful debugging info
+    if (transaction.status === "pending") {
       const initiatedTime = new Date(transaction.initiatedAt || Date.now()).getTime();
       const currentTime = Date.now();
       const secondsElapsed = (currentTime - initiatedTime) / 1000;
