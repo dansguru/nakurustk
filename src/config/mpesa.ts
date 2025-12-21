@@ -1,26 +1,29 @@
 export const mpesaConfig = {
-  consumerKey: process.env.MPESA_CONSUMER_KEY!,
-  consumerSecret: process.env.MPESA_CONSUMER_SECRET!,
-  shortcode: process.env.MPESA_SHORTCODE!,
-  passkey: process.env.MPESA_PASSKEY!,
-  callbackUrl: process.env.MPESA_CALLBACK_URL!,
+  consumerKey: process.env.CONSUMER_KEY || process.env.MPESA_CONSUMER_KEY!,
+  consumerSecret: process.env.SECRET_KEY || process.env.MPESA_CONSUMER_SECRET!,
+  shortcode: process.env.SHORT_CODE || process.env.MPESA_SHORTCODE!,
+  passkey: process.env.PASS_KEY || process.env.MPESA_PASSKEY!,
+  callbackUrl: process.env.CALLBACK_URL || process.env.MPESA_CALLBACK_URL || 'https://nakurustk.vercel.app/api/mpesa/callback',
   baseUrl: process.env.MPESA_BASE_URL || 'https://sandbox.safaricom.co.ke',
 };
 
 // Validate required environment variables
 const requiredVars = [
-  'MPESA_CONSUMER_KEY',
-  'MPESA_CONSUMER_SECRET',
-  'MPESA_SHORTCODE',
-  'MPESA_PASSKEY',
-  'MPESA_CALLBACK_URL'
+  { key: 'CONSUMER_KEY', alt: 'MPESA_CONSUMER_KEY' },
+  { key: 'SECRET_KEY', alt: 'MPESA_CONSUMER_SECRET' },
+  { key: 'SHORT_CODE', alt: 'MPESA_SHORTCODE' },
+  { key: 'PASS_KEY', alt: 'MPESA_PASSKEY' }
 ];
 
-for (const varName of requiredVars) {
-  if (!process.env[varName]) {
-    console.error(`❌ Missing required environment variable: ${varName}`);
+for (const varConfig of requiredVars) {
+  if (!process.env[varConfig.key] && !process.env[varConfig.alt]) {
+    console.error(`❌ Missing required environment variable: ${varConfig.key} or ${varConfig.alt}`);
   }
 }
 
-console.log('✅ M-Pesa configuration loaded');
+console.log('✅ M-Pesa configuration loaded', {
+  shortcode: mpesaConfig.shortcode,
+  callbackUrl: mpesaConfig.callbackUrl,
+  baseUrl: mpesaConfig.baseUrl,
+});
 
