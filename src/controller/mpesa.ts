@@ -4,40 +4,106 @@ import { supabase } from '../config/supabase';
 
 export const stkPushController = async (req: Request, res: Response) => {
   try {
-    const { booking_id, phone_number, amount, account_reference, transaction_desc } = req.body;
+    const { 
+      event_id, 
+      user_id, 
+      user_name, 
+      user_email, 
+      user_phone, 
+      ticket_type, 
+      ticket_price, 
+      quantity, 
+      total_amount,
+      phone_number, 
+      amount, 
+      account_reference, 
+      transaction_desc 
+    } = req.body;
 
-    // Validate request
-    if (!booking_id || !phone_number || !amount) {
+    // Validate required fields
+    const missingFields = [];
+    if (!event_id) missingFields.push('event_id');
+    if (!user_id) missingFields.push('user_id');
+    if (!phone_number) missingFields.push('phone_number');
+    if (!amount || amount <= 0) missingFields.push('amount');
+
+    if (missingFields.length > 0) {
+      console.error('❌ Missing required fields:', missingFields);
+      console.error('❌ Received data:', {
+        event_id: !!event_id,
+        user_id: !!user_id,
+        phone_number: !!phone_number,
+        amount: amount,
+        total_amount: total_amount,
+      });
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields: booking_id, phone_number, amount',
+        message: `Missing required fields: ${missingFields.join(', ')}`,
+        missing_fields: missingFields,
       });
     }
 
-    // Verify booking exists
-    const { data: booking, error: bookingError } = await supabase
+    // Check if user already has a paid booking for this event (prevent duplicates)
+    const { data: existingBookings } = await supabase
       .from('event_bookings')
-      .select('*')
-      .eq('id', booking_id)
-      .single();
+      .select('id, payment_status')
+      .eq('event_id', event_id)
+      .eq('user_id', user_id)
+      .eq('booking_status', 'confirmed');
 
-    if (bookingError || !booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'Booking not found',
-      });
+    if (existingBookings && existingBookings.length > 0) {
+      const paidBooking = existingBookings.find(b => b.payment_status === 'paid');
+      const pendingBooking = existingBookings.find(b => b.payment_status === 'pending');
+      
+      if (paidBooking) {
+        return res.status(400).json({
+          success: false,
+          message: 'You have already booked and paid for this event',
+          booking_id: paidBooking.id,
+        });
+      }
+      
+      if (pendingBooking) {
+        return res.status(400).json({
+          success: false,
+          message: 'You have a pending booking for this event. Please complete that payment first.',
+          booking_id: pendingBooking.id,
+        });
+      }
     }
 
-    // Initiate STK Push
+    // Store payment data temporarily (we'll create booking after payment succeeds)
+    // For now, just initiate STK Push
     const mpesaResponse = await initiateSTKPush({
       phone_number,
       amount,
-      account_reference: account_reference || `EVENT-${booking_id.substring(0, 8)}`,
+      account_reference: account_reference || `EVENT-${event_id.substring(0, 8)}`,
       transaction_desc: transaction_desc || 'Event booking payment',
     });
 
     if (mpesaResponse.ResponseCode === '0') {
-      // STK Push successful
+      // STK Push successful - store payment data temporarily
+      const { error: storeError } = await supabase
+        .from('pending_payments')
+        .insert({
+          checkout_request_id: mpesaResponse.CheckoutRequestID,
+          event_id,
+          user_id,
+          user_name: user_name || 'Unknown',
+          user_email: user_email || '',
+          user_phone: user_phone || phone_number,
+          ticket_type: ticket_type || 'Regular',
+          ticket_price: ticket_price || amount,
+          quantity: quantity || 1,
+          total_amount: total_amount || amount,
+          payment_method: 'M-Pesa',
+        });
+
+      if (storeError) {
+        console.error('❌ Error storing pending payment:', storeError);
+        // Still return success to user, but log the error
+      }
+
       res.json({
         success: true,
         message: 'STK Push sent successfully',
@@ -79,20 +145,15 @@ export const mpesaCallbackController = async (req: Request, res: Response) => {
 
     const { MerchantRequestID, CheckoutRequestID, ResultCode, ResultDesc } = stkCallback;
 
-    // Find booking by CheckoutRequestID
-    const { data: booking, error: bookingError } = await supabase
-      .from('event_bookings')
+    // Get pending payment data first
+    const { data: pendingPayment } = await supabase
+      .from('pending_payments')
       .select('*')
-      .eq('mpesa_checkout_request_id', CheckoutRequestID)
+      .eq('checkout_request_id', CheckoutRequestID)
       .single();
 
-    if (bookingError || !booking) {
-      console.error('❌ Booking not found for CheckoutRequestID:', CheckoutRequestID);
-      return res.json({ success: true, message: 'Callback received' });
-    }
-
     if (ResultCode === 0) {
-      // Payment successful
+      // Payment successful - retrieve payment data and CREATE booking
       const callbackMetadata = stkCallback.CallbackMetadata?.Item || [];
       const mpesaReceiptNumber = callbackMetadata.find(
         (item: any) => item.Name === 'MpesaReceiptNumber'
@@ -101,11 +162,27 @@ export const mpesaCallbackController = async (req: Request, res: Response) => {
         (item: any) => item.Name === 'TransactionDate'
       )?.Value;
 
-      // Update booking
-      const { error: updateError } = await supabase
+      if (!pendingPayment) {
+        console.error('❌ Pending payment not found for CheckoutRequestID:', CheckoutRequestID);
+        return res.json({ ResultCode: 0, ResultDesc: 'Success' });
+      }
+
+      // Create booking
+      const { data: booking, error: bookingError } = await supabase
         .from('event_bookings')
-        .update({
+        .insert({
+          event_id: pendingPayment.event_id,
+          user_id: pendingPayment.user_id,
+          user_name: pendingPayment.user_name,
+          user_email: pendingPayment.user_email,
+          user_phone: pendingPayment.user_phone,
+          ticket_type: pendingPayment.ticket_type,
+          ticket_price: pendingPayment.ticket_price,
+          quantity: pendingPayment.quantity,
+          total_amount: pendingPayment.total_amount,
+          payment_method: 'M-Pesa',
           payment_status: 'paid',
+          mpesa_checkout_request_id: CheckoutRequestID,
           mpesa_receipt_number: mpesaReceiptNumber,
           mpesa_transaction_date: transactionDate
             ? new Date(
@@ -115,29 +192,68 @@ export const mpesaCallbackController = async (req: Request, res: Response) => {
                 )
               ).toISOString()
             : new Date().toISOString(),
+          mpesa_phone_number: pendingPayment.user_phone,
+          booking_status: 'confirmed',
           paid_at: new Date().toISOString(),
         })
-        .eq('id', booking.id);
+        .select()
+        .single();
 
-      if (updateError) {
-        console.error('❌ Error updating booking:', updateError);
+      if (bookingError) {
+        console.error('❌ Error creating booking:', bookingError);
       } else {
-        console.log('✅ Booking payment confirmed:', booking.id);
+        console.log('✅ Booking created successfully:', booking.id);
+        
+        // Update pending payment with status
+        await supabase
+          .from('pending_payments')
+          .update({ 
+            payment_status: 'paid',
+            booking_id: booking.id 
+          })
+          .eq('checkout_request_id', CheckoutRequestID);
       }
+      
     } else {
-      // Payment failed
-      const { error: updateError } = await supabase
-        .from('event_bookings')
-        .update({
-          payment_status: 'failed',
-        })
-        .eq('id', booking.id);
+      // Payment failed - update pending payment with error details
+      let errorType = 'failed';
+      let errorMessage = ResultDesc;
 
-      if (updateError) {
-        console.error('❌ Error updating booking:', updateError);
-      } else {
-        console.log('❌ Payment failed for booking:', booking.id, ResultDesc);
+      // Map M-Pesa error codes to user-friendly messages
+      switch (ResultCode) {
+        case 1032:
+          errorType = 'cancelled';
+          errorMessage = 'Payment cancelled by user';
+          break;
+        case 1037:
+          errorType = 'timeout';
+          errorMessage = 'Payment timeout - please try again';
+          break;
+        case 1:
+          errorType = 'insufficient_funds';
+          errorMessage = 'Insufficient funds in your M-Pesa account';
+          break;
+        case 17:
+          errorType = 'cancelled';
+          errorMessage = 'Transaction cancelled';
+          break;
+        default:
+          errorType = 'failed';
+          errorMessage = ResultDesc || 'Payment failed';
       }
+
+      if (pendingPayment) {
+        await supabase
+          .from('pending_payments')
+          .update({ 
+            payment_status: errorType,
+            error_code: ResultCode,
+            error_message: errorMessage
+          })
+          .eq('checkout_request_id', CheckoutRequestID);
+      }
+      
+      console.log(`❌ Payment ${errorType}:`, errorMessage, 'Code:', ResultCode);
     }
 
     // Always return success to M-Pesa
