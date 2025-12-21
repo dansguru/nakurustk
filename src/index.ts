@@ -1,6 +1,11 @@
 import express from "express";
 import cors from "cors";
+import dotenv from "dotenv";
 import TokenRoute from "./routes/token";
+import MpesaRoute from "./routes/mpesa";
+
+// Load environment variables
+dotenv.config();
 
 const app = express();
 
@@ -20,6 +25,7 @@ app.get("/", (req, res) => {
 
 // Payment routes
 app.use("/token", TokenRoute);
+app.use("/api/mpesa", MpesaRoute);
 
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
