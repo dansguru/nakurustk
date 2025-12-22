@@ -26,18 +26,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    // For Vercel dynamic routes, the path param comes from the URL
-    const urlParts = req.url?.split('/') || [];
-    const checkoutRequestId = urlParts[urlParts.length - 1]; // Last part of URL
+    // Extract checkout_request_id from URL path
+    // Vercel passes the full path in req.url (e.g., "/api/mpesa/payment-status/ws_CO_...")
+    let checkoutRequestId: string | undefined;
+    
+    if (req.url) {
+      // Remove query string if present
+      const urlPath = req.url.split('?')[0];
+      // Split by '/' and filter out empty parts
+      const urlParts = urlPath.split('/').filter(part => part && part.length > 0);
+      
+      // Find 'payment-status' in the path and get the next segment
+      const statusIndex = urlParts.indexOf('payment-status');
+      if (statusIndex !== -1 && urlParts[statusIndex + 1]) {
+        checkoutRequestId = urlParts[statusIndex + 1];
+      } else if (urlParts.length > 0) {
+        // Fallback: get the last non-empty segment
+        checkoutRequestId = urlParts[urlParts.length - 1];
+      }
+    }
 
-    if (!checkoutRequestId) {
+    if (!checkoutRequestId || checkoutRequestId === 'payment-status' || checkoutRequestId.length === 0) {
+      console.error('❌ Missing checkout_request_id. URL:', req.url, 'Query:', req.query);
       return res.status(400).json({
         success: false,
-        message: 'Missing checkout_request_id',
+        message: 'Missing checkout_request_id in URL path. Expected: /api/mpesa/payment-status/{checkoutRequestId}',
+        url: req.url,
+        query: req.query,
       });
     }
 
-    console.log('🔍 Checking payment status for:', checkoutRequestId);
+    console.log('🔍 Checking payment status for:', checkoutRequestId, '| URL:', req.url);
 
     // Check pending payments table
     const { data: pendingPayment, error: pendingError } = await supabase
@@ -47,40 +66,54 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .single();
 
     if (pendingError) {
-      // If not found, check bookings
+      console.log('⚠️ Pending payment query error:', pendingError.code, pendingError.message);
+      
+      // If not found in pending_payments, check bookings table
       if (pendingError.code === 'PGRST116') {
-        const { data: booking } = await supabase
+        console.log('🔍 Checking bookings table for:', checkoutRequestId);
+        const { data: booking, error: bookingError } = await supabase
           .from('event_bookings')
           .select('payment_status, mpesa_checkout_request_id')
           .eq('mpesa_checkout_request_id', checkoutRequestId)
           .single();
 
         if (booking) {
+          console.log('✅ Found booking with status:', booking.payment_status);
           return res.json({
             success: true,
             status: booking.payment_status,
             checkout_request_id: checkoutRequestId,
           });
         }
+        
+        if (bookingError && bookingError.code !== 'PGRST116') {
+          console.error('❌ Booking query error:', bookingError);
+        }
+      } else {
+        console.error('❌ Pending payment query error (non-404):', pendingError);
       }
 
+      // Return 404 only if not found in both tables
       return res.status(404).json({
         success: false,
-        message: 'Payment not found',
+        message: 'Payment not found. The payment may not have been initiated or the checkout request ID is invalid.',
+        checkout_request_id: checkoutRequestId,
         error: pendingError.message,
         code: pendingError.code,
       });
     }
 
     if (!pendingPayment) {
-      // Check bookings
-      const { data: booking } = await supabase
+      console.log('⚠️ Pending payment is null, checking bookings table');
+      // Check bookings table as fallback
+      const { data: booking, error: bookingError } = await supabase
         .from('event_bookings')
         .select('payment_status, mpesa_checkout_request_id')
         .eq('mpesa_checkout_request_id', checkoutRequestId)
         .single();
 
       if (booking) {
+        console.log('✅ Found booking with status:', booking.payment_status);
         return res.json({
           success: true,
           status: booking.payment_status,
@@ -90,9 +123,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       return res.status(404).json({
         success: false,
-        message: 'Payment not found',
+        message: 'Payment not found in pending payments or bookings',
+        checkout_request_id: checkoutRequestId,
       });
     }
+    
+    console.log('✅ Found pending payment with status:', pendingPayment.payment_status);
 
     // Return payment status
     return res.json({
