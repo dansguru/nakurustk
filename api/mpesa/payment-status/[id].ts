@@ -1,11 +1,22 @@
-import { Request, Response } from 'express';
-import { supabase } from '../config/supabase';
+// @ts-ignore - Vercel types
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { createClient } from '@supabase/supabase-js';
 
-export const getPaymentStatusController = async (req: Request, res: Response) => {
+// Hardcoded Supabase credentials (TEMPORARY)
+const SUPABASE_URL = 'https://nzlluafskrrhbryimftu.supabase.co';
+const SUPABASE_SERVICE_KEY = 'sb_secret_g2yRYthqbpz9Zs41nAWuHw_wJe3l2TR';
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+  auth: { autoRefreshToken: false, persistSession: false },
+});
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== 'GET') {
+    return res.status(405).json({ success: false, message: 'Method not allowed' });
+  }
+
   try {
-    const { checkoutRequestId } = req.params;
-
-    console.log('🔍 Checking payment status for:', checkoutRequestId);
+    const checkoutRequestId = req.query.id as string;
 
     if (!checkoutRequestId) {
       return res.status(400).json({
@@ -13,6 +24,8 @@ export const getPaymentStatusController = async (req: Request, res: Response) =>
         message: 'Missing checkout_request_id',
       });
     }
+
+    console.log('🔍 Checking payment status for:', checkoutRequestId);
 
     // Check pending payments table
     const { data: pendingPayment, error: pendingError } = await supabase
@@ -22,21 +35,15 @@ export const getPaymentStatusController = async (req: Request, res: Response) =>
       .single();
 
     if (pendingError) {
-      console.log('⚠️ Error querying pending_payments:', pendingError);
-      console.log('   Code:', pendingError.code);
-      console.log('   Message:', pendingError.message);
-      
-      // If it's a "not found" error (PGRST116), check bookings
+      // If not found, check bookings
       if (pendingError.code === 'PGRST116') {
-        // Check if booking exists (payment succeeded)
-        const { data: booking, error: bookingError } = await supabase
+        const { data: booking } = await supabase
           .from('event_bookings')
           .select('payment_status, mpesa_checkout_request_id')
           .eq('mpesa_checkout_request_id', checkoutRequestId)
           .single();
 
         if (booking) {
-          console.log('✅ Found booking for checkout:', checkoutRequestId);
           return res.json({
             success: true,
             status: booking.payment_status,
@@ -54,8 +61,7 @@ export const getPaymentStatusController = async (req: Request, res: Response) =>
     }
 
     if (!pendingPayment) {
-      console.log('⚠️ No pending payment found, checking bookings...');
-      // Check if booking exists (payment succeeded)
+      // Check bookings
       const { data: booking } = await supabase
         .from('event_bookings')
         .select('payment_status, mpesa_checkout_request_id')
@@ -63,7 +69,6 @@ export const getPaymentStatusController = async (req: Request, res: Response) =>
         .single();
 
       if (booking) {
-        console.log('✅ Found booking for checkout:', checkoutRequestId);
         return res.json({
           success: true,
           status: booking.payment_status,
@@ -77,14 +82,8 @@ export const getPaymentStatusController = async (req: Request, res: Response) =>
       });
     }
 
-    console.log('✅ Found pending payment:', {
-      id: pendingPayment.id,
-      status: pendingPayment.payment_status,
-      error_message: pendingPayment.error_message,
-    });
-
-    // Return payment status (including errors from callback)
-    res.json({
+    // Return payment status
+    return res.json({
       success: true,
       status: pendingPayment.payment_status || 'pending',
       error_code: pendingPayment.error_code || null,
@@ -93,11 +92,11 @@ export const getPaymentStatusController = async (req: Request, res: Response) =>
     });
   } catch (error: any) {
     console.error('❌ Get payment status error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Internal server error',
       error: error.message,
     });
   }
-};
+}
 
