@@ -12,6 +12,10 @@
       "dest": "/api/index.ts"
     },
     {
+      "src": "/api/mpesa/payment-status/(.*)",
+      "dest": "/api/mpesa/payment-status.ts"
+    },
+    {
       "src": "/api/(.*)",
       "dest": "/api/$1.ts"
     }

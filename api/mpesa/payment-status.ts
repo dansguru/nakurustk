@@ -16,10 +16,11 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
 });
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Set CORS headers
+  // Set CORS headers FIRST - before any other logic (including errors)
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Max-Age', '86400');
 
   // Handle preflight OPTIONS request
   if (req.method === 'OPTIONS') {
@@ -31,6 +32,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
+    // Log the incoming request for debugging
+    console.log('📥 Payment status request - Method:', req.method, 'URL:', req.url, 'Query:', req.query);
+    
     // Extract checkout_request_id from URL path
     // Vercel passes the full path in req.url (e.g., "/api/mpesa/payment-status/ws_CO_...")
     let checkoutRequestId: string | undefined;
@@ -40,6 +44,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const urlPath = req.url.split('?')[0];
       // Split by '/' and filter out empty parts
       const urlParts = urlPath.split('/').filter((part: string) => part && part.length > 0);
+      
+      console.log('🔍 URL parts:', urlParts);
       
       // Find 'payment-status' in the path and get the next segment
       const statusIndex = urlParts.indexOf('payment-status');
