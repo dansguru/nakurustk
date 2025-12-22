@@ -34,7 +34,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Remove query string if present
       const urlPath = req.url.split('?')[0];
       // Split by '/' and filter out empty parts
-      const urlParts = urlPath.split('/').filter(part => part && part.length > 0);
+      const urlParts = urlPath.split('/').filter((part: string) => part && part.length > 0);
       
       // Find 'payment-status' in the path and get the next segment
       const statusIndex = urlParts.indexOf('payment-status');
@@ -68,6 +68,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (pendingError) {
       console.log('⚠️ Pending payment query error:', pendingError.code, pendingError.message);
       
+      // Check if it's a network/connection error
+      const isNetworkError = pendingError.message?.includes('fetch failed') || 
+                            pendingError.message?.includes('ENOTFOUND') ||
+                            pendingError.message?.includes('ECONNREFUSED') ||
+                            pendingError.details?.includes('fetch failed');
+      
+      if (isNetworkError) {
+        console.error('❌ Database connection error:', pendingError);
+        return res.status(503).json({
+          success: false,
+          message: 'Database service temporarily unavailable. Please try again in a moment.',
+          checkout_request_id: checkoutRequestId,
+          error: 'Database connection failed',
+        });
+      }
+      
       // If not found in pending_payments, check bookings table
       if (pendingError.code === 'PGRST116') {
         console.log('🔍 Checking bookings table for:', checkoutRequestId);
@@ -86,14 +102,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           });
         }
         
-        if (bookingError && bookingError.code !== 'PGRST116') {
-          console.error('❌ Booking query error:', bookingError);
+        // Check if booking query also has network error
+        if (bookingError) {
+          const isBookingNetworkError = bookingError.message?.includes('fetch failed') || 
+                                      bookingError.message?.includes('ENOTFOUND') ||
+                                      bookingError.message?.includes('ECONNREFUSED') ||
+                                      bookingError.details?.includes('fetch failed');
+          
+          if (isBookingNetworkError) {
+            console.error('❌ Database connection error on bookings query:', bookingError);
+            return res.status(503).json({
+              success: false,
+              message: 'Database service temporarily unavailable. Please try again in a moment.',
+              checkout_request_id: checkoutRequestId,
+              error: 'Database connection failed',
+            });
+          }
         }
       } else {
         console.error('❌ Pending payment query error (non-404):', pendingError);
       }
 
-      // Return 404 only if not found in both tables
+      // Return 404 only if not found in both tables (not a network error)
       return res.status(404).json({
         success: false,
         message: 'Payment not found. The payment may not have been initiated or the checkout request ID is invalid.',
@@ -119,6 +149,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           status: booking.payment_status,
           checkout_request_id: checkoutRequestId,
         });
+      }
+
+      // Check if booking query has network error
+      if (bookingError) {
+        const isBookingNetworkError = bookingError.message?.includes('fetch failed') || 
+                                      bookingError.message?.includes('ENOTFOUND') ||
+                                      bookingError.message?.includes('ECONNREFUSED') ||
+                                      bookingError.details?.includes('fetch failed');
+        
+        if (isBookingNetworkError) {
+          console.error('❌ Database connection error on bookings query:', bookingError);
+          return res.status(503).json({
+            success: false,
+            message: 'Database service temporarily unavailable. Please try again in a moment.',
+            checkout_request_id: checkoutRequestId,
+            error: 'Database connection failed',
+          });
+        }
       }
 
       return res.status(404).json({

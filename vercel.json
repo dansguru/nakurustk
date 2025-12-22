@@ -12,18 +12,6 @@
       "dest": "/api/index.ts"
     },
     {
-      "src": "/api/mpesa/stk-push",
-      "dest": "/api/mpesa/stk-push.ts"
-    },
-    {
-      "src": "/api/mpesa/callback",
-      "dest": "/api/mpesa/callback.ts"
-    },
-    {
-      "src": "/api/mpesa/payment-status/(.*)",
-      "dest": "/api/mpesa/payment-status.ts"
-    },
-    {
       "src": "/api/(.*)",
       "dest": "/api/$1.ts"
     }
