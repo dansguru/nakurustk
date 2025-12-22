@@ -3,8 +3,13 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
 
+// Force Node.js runtime (required for Supabase JS to work correctly)
+export const config = {
+  runtime: 'nodejs',
+};
+
 // Hardcoded Supabase credentials (TEMPORARY - replace with env vars later)
-const SUPABASE_URL = 'https://nzlluafskrrhbryimftu.supabase.co';
+const SUPABASE_URL = 'https://nzlluafskmrhbryimftu.supabase.co';
 const SUPABASE_SERVICE_KEY = 'sb_secret_g2yRYthqbpz9Zs41nAWuHw_wJe3l2TR';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {

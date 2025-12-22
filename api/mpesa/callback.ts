@@ -2,8 +2,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 
+// Force Node.js runtime (required for Supabase JS to work correctly)
+export const config = {
+  runtime: 'nodejs',
+};
+
 // Hardcoded Supabase credentials (TEMPORARY)
-const SUPABASE_URL = 'https://nzlluafskrrhbryimftu.supabase.co';
+const SUPABASE_URL = 'https://nzlluafskmrhbryimftu.supabase.co';
 const SUPABASE_SERVICE_KEY = 'sb_secret_g2yRYthqbpz9Zs41nAWuHw_wJe3l2TR';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
@@ -28,12 +33,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const { MerchantRequestID, CheckoutRequestID, ResultCode, ResultDesc } = stkCallback;
 
-    // Get pending payment
-    const { data: pendingPayment } = await supabase
-      .from('pending_payments')
-      .select('*')
-      .eq('checkout_request_id', CheckoutRequestID)
-      .single();
+    // Get pending payment (with error handling for connection issues)
+    let pendingPayment;
+    let pendingPaymentError;
+    let isNetworkError = false;
+    try {
+      const result = await supabase
+        .from('pending_payments')
+        .select('*')
+        .eq('checkout_request_id', CheckoutRequestID)
+        .single();
+      pendingPayment = result.data;
+      pendingPaymentError = result.error;
+      
+      // Check if it's a network/DNS error
+      if (pendingPaymentError) {
+        isNetworkError = pendingPaymentError.message?.includes('fetch failed') || 
+                        pendingPaymentError.message?.includes('ENOTFOUND') ||
+                        pendingPaymentError.details?.includes('fetch failed');
+        if (isNetworkError) {
+          console.error('❌ Database connection error when fetching pending payment:', pendingPaymentError);
+        }
+      }
+    } catch (error: any) {
+      console.error('❌ Error fetching pending payment:', error);
+      pendingPaymentError = error;
+      isNetworkError = error.message?.includes('fetch failed') || 
+                      error.message?.includes('ENOTFOUND') ||
+                      error.details?.includes('fetch failed');
+    }
 
     if (ResultCode === 0) {
       // Payment successful
@@ -92,7 +120,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         case 17: errorType = 'cancelled'; errorMessage = 'Transaction cancelled'; break;
       }
 
+      // Update or create pending payment record with error status
       if (pendingPayment) {
+        // Update existing record
         await supabase
           .from('pending_payments')
           .update({
@@ -103,6 +133,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .eq('checkout_request_id', CheckoutRequestID);
 
         console.log(`❌ Payment ${errorType}:`, errorMessage);
+      } else {
+        // Create minimal record if it doesn't exist (e.g., if initial insert failed due to Supabase issues)
+        // This ensures payment-status endpoint can find the result
+        // Only try if it's not a network error (would fail anyway)
+        if (!isNetworkError) {
+          try {
+            const insertResult = await supabase
+              .from('pending_payments')
+              .insert({
+                checkout_request_id: CheckoutRequestID,
+                payment_status: errorType,
+                error_code: String(ResultCode),
+                error_message: errorMessage,
+                // Minimal required fields - event details will be null but status is what matters
+                event_id: null,
+                user_id: null,
+                total_amount: null,
+              });
+            
+            if (insertResult.error) {
+              console.error('❌ Failed to create pending payment record:', insertResult.error);
+            } else {
+              console.log(`✅ Created pending payment record for failed payment: ${errorType}`);
+            }
+          } catch (insertError: any) {
+            console.error('❌ Exception creating pending payment record:', insertError);
+            // Continue anyway - at least we logged the callback
+          }
+        } else {
+          console.warn('⚠️ Skipping record creation due to database connection error');
+        }
       }
     }
 
