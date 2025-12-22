@@ -41,12 +41,12 @@ export const getPaymentStatusController = async (req: Request, res: Response) =>
       });
     }
 
-    // Return payment status
+    // Return payment status (including errors from callback)
     res.json({
       success: true,
       status: pendingPayment.payment_status || 'pending',
-      error_code: pendingPayment.error_code,
-      error_message: pendingPayment.error_message,
+      error_code: pendingPayment.error_code || null,
+      error_message: pendingPayment.error_message || null,
       checkout_request_id: checkoutRequestId,
     });
   } catch (error: any) {

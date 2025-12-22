@@ -137,6 +137,7 @@ export const mpesaCallbackController = async (req: Request, res: Response) => {
     const stkCallback = Body?.stkCallback;
 
     if (!stkCallback) {
+      console.error('❌ Invalid callback format - no stkCallback found');
       return res.status(400).json({
         success: false,
         message: 'Invalid callback format',
@@ -144,6 +145,12 @@ export const mpesaCallbackController = async (req: Request, res: Response) => {
     }
 
     const { MerchantRequestID, CheckoutRequestID, ResultCode, ResultDesc } = stkCallback;
+    
+    console.log('📋 Callback details:', {
+      CheckoutRequestID,
+      ResultCode,
+      ResultDesc,
+    });
 
     // Get pending payment data first
     const { data: pendingPayment } = await supabase
@@ -217,40 +224,64 @@ export const mpesaCallbackController = async (req: Request, res: Response) => {
     } else {
       // Payment failed - update pending payment with error details
       let errorType = 'failed';
-      let errorMessage = ResultDesc;
+      let errorMessage = ResultDesc || 'Payment failed';
 
       // Map M-Pesa error codes to user-friendly messages
       switch (ResultCode) {
+        case 1:
+          errorType = 'insufficient_funds';
+          errorMessage = 'Insufficient funds in your M-Pesa account. Please top up and try again.';
+          break;
         case 1032:
           errorType = 'cancelled';
-          errorMessage = 'Payment cancelled by user';
+          errorMessage = 'Payment was cancelled. Please try again.';
           break;
         case 1037:
           errorType = 'timeout';
-          errorMessage = 'Payment timeout - please try again';
+          errorMessage = 'Payment timeout - you did not enter your PIN in time. Please try again.';
           break;
-        case 1:
-          errorType = 'insufficient_funds';
-          errorMessage = 'Insufficient funds in your M-Pesa account';
+        case 2001:
+          errorType = 'wrong_pin';
+          errorMessage = 'Wrong PIN entered. Please try again.';
+          break;
+        case 26:
+          errorType = 'system_busy';
+          errorMessage = 'M-Pesa system is busy. Please try again in a moment.';
+          break;
+        case 1019:
+          errorType = 'expired';
+          errorMessage = 'Transaction expired. Please try again.';
           break;
         case 17:
           errorType = 'cancelled';
-          errorMessage = 'Transaction cancelled';
+          errorMessage = 'Transaction cancelled. Please try again.';
           break;
         default:
           errorType = 'failed';
-          errorMessage = ResultDesc || 'Payment failed';
+          errorMessage = ResultDesc || 'Payment failed. Please try again.';
       }
 
       if (pendingPayment) {
-        await supabase
+        const { error: updateError } = await supabase
           .from('pending_payments')
           .update({ 
             payment_status: errorType,
-            error_code: ResultCode,
+            error_code: String(ResultCode),
             error_message: errorMessage
           })
           .eq('checkout_request_id', CheckoutRequestID);
+
+        if (updateError) {
+          console.error('❌ Error updating pending payment:', updateError);
+        } else {
+          console.log(`✅ Updated pending payment with error:`);
+          console.log(`   - Status: ${errorType}`);
+          console.log(`   - Message: ${errorMessage}`);
+          console.log(`   - Code: ${ResultCode}`);
+          console.log(`   - CheckoutRequestID: ${CheckoutRequestID}`);
+        }
+      } else {
+        console.log(`⚠️ No pending payment found for CheckoutRequestID: ${CheckoutRequestID}`);
       }
       
       console.log(`❌ Payment ${errorType}:`, errorMessage, 'Code:', ResultCode);
