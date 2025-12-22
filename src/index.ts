@@ -25,6 +25,14 @@ app.get("/", (req, res) => {
 // M-Pesa API routes
 app.use("/api/mpesa", MpesaRoute);
 
+// Debug: Log all incoming requests in Vercel
+if (process.env.VERCEL || process.env.VERCEL_ENV) {
+  app.use((req, res, next) => {
+    console.log(`📥 ${req.method} ${req.path}`);
+    next();
+  });
+}
+
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error("❌ Unhandled error:", err);
@@ -43,10 +51,13 @@ app.use((req, res) => {
 });
 
 // Export for Vercel serverless functions
-export default app;
+// Vercel expects a handler function that can handle async operations
+export default async (req: express.Request, res: express.Response) => {
+  return app(req, res);
+};
 
 // Only start server if not in Vercel environment
-if (process.env.VERCEL !== '1') {
+if (process.env.VERCEL !== '1' && !process.env.VERCEL_ENV) {
   app.listen(port, () => {
     console.log("🚀 M-Pesa Payment Gateway Server started");
     console.log(`📌 Port: ${port}`);
