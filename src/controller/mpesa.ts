@@ -83,25 +83,44 @@ export const stkPushController = async (req: Request, res: Response) => {
 
     if (mpesaResponse.ResponseCode === '0') {
       // STK Push successful - store payment data temporarily
-      const { error: storeError } = await supabase
+      const pendingPaymentData = {
+        checkout_request_id: mpesaResponse.CheckoutRequestID,
+        event_id,
+        user_id,
+        user_name: user_name || 'Unknown',
+        user_email: user_email || '',
+        user_phone: user_phone || phone_number,
+        ticket_type: ticket_type || 'Regular',
+        ticket_price: ticket_price || amount,
+        quantity: quantity || 1,
+        total_amount: total_amount || amount,
+        payment_method: 'M-Pesa',
+        payment_status: 'pending',
+      };
+
+      console.log('💾 Attempting to store pending payment:', {
+        checkout_request_id: pendingPaymentData.checkout_request_id,
+        event_id: pendingPaymentData.event_id,
+        user_id: pendingPaymentData.user_id,
+      });
+
+      const { data: insertedData, error: storeError } = await supabase
         .from('pending_payments')
-        .insert({
-          checkout_request_id: mpesaResponse.CheckoutRequestID,
-          event_id,
-          user_id,
-          user_name: user_name || 'Unknown',
-          user_email: user_email || '',
-          user_phone: user_phone || phone_number,
-          ticket_type: ticket_type || 'Regular',
-          ticket_price: ticket_price || amount,
-          quantity: quantity || 1,
-          total_amount: total_amount || amount,
-          payment_method: 'M-Pesa',
-        });
+        .insert(pendingPaymentData)
+        .select()
+        .single();
 
       if (storeError) {
         console.error('❌ Error storing pending payment:', storeError);
+        console.error('❌ Error details:', {
+          code: storeError.code,
+          message: storeError.message,
+          details: storeError.details,
+          hint: storeError.hint,
+        });
         // Still return success to user, but log the error
+      } else {
+        console.log('✅ Pending payment stored successfully:', insertedData?.id);
       }
 
       res.json({
