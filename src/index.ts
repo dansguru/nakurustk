@@ -42,10 +42,16 @@ app.use((req, res) => {
   });
 });
 
-app.listen(port, () => {
-  console.log("🚀 M-Pesa Payment Gateway Server started");
-  console.log(`📌 Port: ${port}`);
-  console.log(`🌐 Base URL: http://localhost:${port}`);
-  console.log(`📡 Ready to receive M-Pesa transactions`);
-  console.log(`✅ Using Supabase for database`);
-});
+// Export for Vercel serverless functions
+export default app;
+
+// Only start server if not in Vercel environment
+if (process.env.VERCEL !== '1') {
+  app.listen(port, () => {
+    console.log("🚀 M-Pesa Payment Gateway Server started");
+    console.log(`📌 Port: ${port}`);
+    console.log(`🌐 Base URL: http://localhost:${port}`);
+    console.log(`📡 Ready to receive M-Pesa transactions`);
+    console.log(`✅ Using Supabase for database`);
+  });
+}
