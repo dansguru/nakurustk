@@ -16,7 +16,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const checkoutRequestId = req.query.id as string;
+    // For Vercel dynamic routes, the path param comes from the URL
+    const urlParts = req.url?.split('/') || [];
+    const checkoutRequestId = urlParts[urlParts.length - 1]; // Last part of URL
 
     if (!checkoutRequestId) {
       return res.status(400).json({
