@@ -182,6 +182,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     
     console.log('✅ Found pending payment with status:', pendingPayment.payment_status);
+    console.log('📤 Returning payment status response:', {
+      success: true,
+      status: pendingPayment.payment_status || 'pending',
+      error_code: pendingPayment.error_code || null,
+      error_message: pendingPayment.error_message || null,
+      checkout_request_id: checkoutRequestId,
+    });
 
     // Return payment status
     return res.json({
