@@ -45,10 +45,3 @@ const SUPABASE_URL = process.env.SUPABASE_URL || 'https://nzlluafskrrhbryimftu.s
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'sb_secret_g2yRYthqbpz9Zs41nAWuHw_wJe3l2TR';
 ```
 
-## Testing
-
-After deployment, test:
-1. `GET /` - Should return status OK
-2. `POST /api/mpesa/stk-push` - Should initiate payment
-3. `GET /api/mpesa/payment-status/:id` - Should return payment status (no more 404!)
-
