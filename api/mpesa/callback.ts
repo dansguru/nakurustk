@@ -69,6 +69,113 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const mpesaReceiptNumber = callbackMetadata.find((item: any) => item.Name === 'MpesaReceiptNumber')?.Value;
       const transactionDate = callbackMetadata.find((item: any) => item.Name === 'TransactionDate')?.Value;
 
+      // Check if this is a USSD transaction (from PayHero)
+      const { data: ussdTransaction } = await supabase
+        .from('ussd_transactions')
+        .select('*')
+        .eq('checkout_request_id', CheckoutRequestID)
+        .single();
+
+      if (ussdTransaction) {
+        console.log('📱 Processing USSD transaction from PayHero:', ussdTransaction.id);
+        // Handle USSD transaction separately
+        console.log('📱 Processing USSD transaction:', ussdTransaction.id);
+        
+        // Get event details for SMS
+        const { data: eventDetails } = await supabase
+          .from('events')
+          .select('title, event_date, event_time, place')
+          .eq('id', ussdTransaction.event_id)
+          .single();
+
+        // Create booking for USSD transaction
+        const { data: booking, error: bookingError } = await supabase
+          .from('event_bookings')
+          .insert({
+            event_id: ussdTransaction.event_id,
+            user_id: null, // USSD users don't have user_id
+            user_name: `USSD User ${ussdTransaction.phone_number}`,
+            user_email: '',
+            user_phone: ussdTransaction.phone_number,
+            ticket_type: ussdTransaction.ticket_type,
+            ticket_price: ussdTransaction.total_amount / ussdTransaction.quantity,
+            quantity: ussdTransaction.quantity,
+            total_amount: ussdTransaction.total_amount,
+            payment_method: 'M-Pesa (USSD)',
+            payment_status: 'paid',
+            mpesa_checkout_request_id: CheckoutRequestID,
+            mpesa_receipt_number: mpesaReceiptNumber,
+            mpesa_transaction_date: transactionDate
+              ? new Date(String(transactionDate).replace(/(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/, '$1-$2-$3T$4:$5:$6')).toISOString()
+              : new Date().toISOString(),
+            mpesa_phone_number: ussdTransaction.phone_number,
+            booking_status: 'confirmed',
+            paid_at: new Date().toISOString(),
+          })
+          .select()
+          .single();
+
+        if (!bookingError && booking) {
+          console.log('✅ USSD Booking created:', booking.id);
+          
+          // Update USSD transaction
+          await supabase
+            .from('ussd_transactions')
+            .update({
+              payment_status: 'paid',
+              booking_id: booking.id,
+              mpesa_receipt_number: mpesaReceiptNumber,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('checkout_request_id', CheckoutRequestID);
+
+          // Send SMS confirmation via Africa's Talking
+          try {
+            const AT_USERNAME = process.env.AT_USERNAME || '';
+            const AT_API_KEY = process.env.AT_API_KEY || '';
+            
+            if (AT_USERNAME && AT_API_KEY) {
+              const eventTitle = eventDetails?.title || 'Event';
+              const eventDate = eventDetails?.event_date 
+                ? new Date(eventDetails.event_date).toLocaleDateString('en-KE', { 
+                    weekday: 'long', 
+                    year: 'numeric', 
+                    month: 'long', 
+                    day: 'numeric' 
+                  })
+                : 'TBA';
+              const eventTime = eventDetails?.event_time || 'TBA';
+              const eventPlace = eventDetails?.place || 'TBA';
+
+              const smsMessage = `Nakuru Social Club\n\nTicket Confirmed!\n\nEvent: ${eventTitle}\nDate: ${eventDate}\nTime: ${eventTime}\nVenue: ${eventPlace}\nTickets: ${ussdTransaction.quantity}x ${ussdTransaction.ticket_type}\nTotal: KSH ${ussdTransaction.total_amount}\nReceipt: ${mpesaReceiptNumber}\n\nThank you!`;
+
+              const axios = require('axios');
+              await axios.post(
+                'https://api.africastalking.com/version1/messaging',
+                new URLSearchParams({
+                  username: AT_USERNAME,
+                  to: ussdTransaction.phone_number,
+                  message: smsMessage,
+                }),
+                {
+                  headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Accept': 'application/json',
+                    'apiKey': AT_API_KEY,
+                  },
+                }
+              );
+              console.log('✅ SMS sent to:', ussdTransaction.phone_number);
+            }
+          } catch (smsError) {
+            console.error('❌ Error sending SMS:', smsError);
+          }
+        }
+        
+        // Return early - USSD transaction handled
+        return res.json({ ResultCode: 0, ResultDesc: 'Success' });
+      }
+
       if (pendingPayment) {
         // Create booking
         const { data: booking, error: bookingError } = await supabase
