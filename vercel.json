@@ -16,14 +16,6 @@
       "dest": "/api/mpesa/payment-status.ts"
     },
     {
-      "src": "/api/ussd/webhook",
-      "dest": "/api/ussd/webhook.ts"
-    },
-    {
-      "src": "/api/ussd/payment-callback",
-      "dest": "/api/ussd/payment-callback.ts"
-    },
-    {
       "src": "/api/(.*)",
       "dest": "/api/$1.ts"
     }

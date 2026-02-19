@@ -1,92 +1,87 @@
 // @ts-ignore - Vercel types
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { createClient } from '@supabase/supabase-js';
+import { ALLOWED_ORIGIN } from '../lib/config';
+import { supabase } from '../lib/supabase';
 
-// Force Node.js runtime (required for Supabase JS to work correctly)
 export const config = {
   runtime: 'nodejs',
 };
 
-// Hardcoded Supabase credentials (TEMPORARY)
-const SUPABASE_URL = 'https://nzlluafskmrhbryimftu.supabase.co';
-const SUPABASE_SERVICE_KEY = 'sb_secret_g2yRYthqbpz9Zs41nAWuHw_wJe3l2TR';
+function isDbNetworkError(error: any): boolean {
+  return (
+    error?.message?.includes('fetch failed')
+    || error?.message?.includes('ENOTFOUND')
+    || error?.message?.includes('ECONNREFUSED')
+    || error?.details?.includes('fetch failed')
+  );
+}
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
-  auth: { autoRefreshToken: false, persistSession: false },
-});
+function extractCheckoutRequestId(url?: string): string | undefined {
+  if (!url) return undefined;
+  const urlPath = url.split('?')[0];
+  const urlParts = urlPath.split('/').filter((part: string) => part && part.length > 0);
+  const statusIndex = urlParts.indexOf('payment-status');
+  if (statusIndex !== -1 && urlParts[statusIndex + 1]) return urlParts[statusIndex + 1];
+  if (urlParts.length > 0) return urlParts[urlParts.length - 1];
+  return undefined;
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Set CORS headers FIRST - before any other logic (including errors)
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Access-Control-Max-Age', '86400');
 
-  // Handle preflight OPTIONS request
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  if (req.method !== 'GET') {
-    return res.status(405).json({ success: false, message: 'Method not allowed' });
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'GET') return res.status(405).json({ success: false, message: 'Method not allowed' });
 
   try {
-    // Log the incoming request for debugging
-    console.log('📥 Payment status request - Method:', req.method, 'URL:', req.url, 'Query:', req.query);
-    
-    // Extract checkout_request_id from URL path
-    // Vercel passes the full path in req.url (e.g., "/api/mpesa/payment-status/ws_CO_...")
-    let checkoutRequestId: string | undefined;
-    
-    if (req.url) {
-      // Remove query string if present
-      const urlPath = req.url.split('?')[0];
-      // Split by '/' and filter out empty parts
-      const urlParts = urlPath.split('/').filter((part: string) => part && part.length > 0);
-      
-      console.log('🔍 URL parts:', urlParts);
-      
-      // Find 'payment-status' in the path and get the next segment
-      const statusIndex = urlParts.indexOf('payment-status');
-      if (statusIndex !== -1 && urlParts[statusIndex + 1]) {
-        checkoutRequestId = urlParts[statusIndex + 1];
-      } else if (urlParts.length > 0) {
-        // Fallback: get the last non-empty segment
-        checkoutRequestId = urlParts[urlParts.length - 1];
-      }
-    }
-
-    if (!checkoutRequestId || checkoutRequestId === 'payment-status' || checkoutRequestId.length === 0) {
-      console.error('❌ Missing checkout_request_id. URL:', req.url, 'Query:', req.query);
+    const checkoutRequestId = extractCheckoutRequestId(req.url);
+    if (!checkoutRequestId || checkoutRequestId === 'payment-status') {
       return res.status(400).json({
         success: false,
         message: 'Missing checkout_request_id in URL path. Expected: /api/mpesa/payment-status/{checkoutRequestId}',
-        url: req.url,
-        query: req.query,
       });
     }
 
-    console.log('🔍 Checking payment status for:', checkoutRequestId, '| URL:', req.url);
-
-    // Check pending payments table
-    const { data: pendingPayment, error: pendingError } = await supabase
-      .from('pending_payments')
+    // Check T-shirt pending payments first.
+    const { data: pendingTShirtPayment, error: pendingTShirtError } = await supabase
+      .from('pending_tshirt_payments')
       .select('*')
       .eq('checkout_request_id', checkoutRequestId)
       .single();
 
-    if (pendingError) {
-      console.log('⚠️ Pending payment query error:', pendingError.code, pendingError.message);
-      
-      // Check if it's a network/connection error
-      const isNetworkError = pendingError.message?.includes('fetch failed') || 
-                            pendingError.message?.includes('ENOTFOUND') ||
-                            pendingError.message?.includes('ECONNREFUSED') ||
-                            pendingError.details?.includes('fetch failed');
-      
-      if (isNetworkError) {
-        console.error('❌ Database connection error:', pendingError);
+    // Only check event pending payments if no T-shirt payment found.
+    let pendingPayment: any = null;
+    let pendingError: any = null;
+    if (!pendingTShirtPayment) {
+      const eventPendingResult = await supabase
+        .from('pending_payments')
+        .select('*')
+        .eq('checkout_request_id', checkoutRequestId)
+        .single();
+      pendingPayment = eventPendingResult.data;
+      pendingError = eventPendingResult.error;
+    }
+
+    let foundPayment: any = null;
+    let foundError: any = null;
+    let isTShirtPayment = false;
+
+    if (pendingTShirtPayment) {
+      foundPayment = pendingTShirtPayment;
+      foundError = pendingTShirtError;
+      isTShirtPayment = true;
+    } else if (pendingPayment) {
+      foundPayment = pendingPayment;
+      foundError = pendingError;
+      isTShirtPayment = false;
+    } else {
+      foundError = pendingTShirtError || pendingError;
+    }
+
+    if (foundError && !foundPayment) {
+      if (isDbNetworkError(foundError)) {
         return res.status(503).json({
           success: false,
           message: 'Database service temporarily unavailable. Please try again in a moment.',
@@ -94,83 +89,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           error: 'Database connection failed',
         });
       }
-      
-      // If not found in pending_payments, check bookings table
-      if (pendingError.code === 'PGRST116') {
-        console.log('🔍 Checking bookings table for:', checkoutRequestId);
-        const { data: booking, error: bookingError } = await supabase
+
+      if (foundError.code === 'PGRST116') {
+        const { data: tshirtBooking, error: tshirtBookingError } = await supabase
+          .from('tshirt_bookings')
+          .select('payment_status, mpesa_checkout_request_id')
+          .eq('mpesa_checkout_request_id', checkoutRequestId)
+          .single();
+
+        if (tshirtBooking) {
+          return res.json({
+            success: true,
+            status: tshirtBooking.payment_status,
+            checkout_request_id: checkoutRequestId,
+            payment_type: 'tshirt',
+          });
+        }
+
+        const { data: eventBooking, error: eventBookingError } = await supabase
           .from('event_bookings')
           .select('payment_status, mpesa_checkout_request_id')
           .eq('mpesa_checkout_request_id', checkoutRequestId)
           .single();
 
-        if (booking) {
-          console.log('✅ Found booking with status:', booking.payment_status);
+        if (eventBooking) {
           return res.json({
             success: true,
-            status: booking.payment_status,
+            status: eventBooking.payment_status,
             checkout_request_id: checkoutRequestId,
+            payment_type: 'event',
           });
         }
-        
-        // Check if booking query also has network error
-        if (bookingError) {
-          const isBookingNetworkError = bookingError.message?.includes('fetch failed') || 
-                                      bookingError.message?.includes('ENOTFOUND') ||
-                                      bookingError.message?.includes('ECONNREFUSED') ||
-                                      bookingError.details?.includes('fetch failed');
-          
-          if (isBookingNetworkError) {
-            console.error('❌ Database connection error on bookings query:', bookingError);
-            return res.status(503).json({
-              success: false,
-              message: 'Database service temporarily unavailable. Please try again in a moment.',
-              checkout_request_id: checkoutRequestId,
-              error: 'Database connection failed',
-            });
-          }
-        }
-      } else {
-        console.error('❌ Pending payment query error (non-404):', pendingError);
-      }
 
-      // Return 404 only if not found in both tables (not a network error)
-      return res.status(404).json({
-        success: false,
-        message: 'Payment not found. The payment may not have been initiated or the checkout request ID is invalid.',
-        checkout_request_id: checkoutRequestId,
-        error: pendingError.message,
-        code: pendingError.code,
-      });
-    }
-
-    if (!pendingPayment) {
-      console.log('⚠️ Pending payment is null, checking bookings table');
-      // Check bookings table as fallback
-      const { data: booking, error: bookingError } = await supabase
-        .from('event_bookings')
-        .select('payment_status, mpesa_checkout_request_id')
-        .eq('mpesa_checkout_request_id', checkoutRequestId)
-        .single();
-
-      if (booking) {
-        console.log('✅ Found booking with status:', booking.payment_status);
-        return res.json({
-          success: true,
-          status: booking.payment_status,
-          checkout_request_id: checkoutRequestId,
-        });
-      }
-
-      // Check if booking query has network error
-      if (bookingError) {
-        const isBookingNetworkError = bookingError.message?.includes('fetch failed') || 
-                                      bookingError.message?.includes('ENOTFOUND') ||
-                                      bookingError.message?.includes('ECONNREFUSED') ||
-                                      bookingError.details?.includes('fetch failed');
-        
-        if (isBookingNetworkError) {
-          console.error('❌ Database connection error on bookings query:', bookingError);
+        if (isDbNetworkError(tshirtBookingError) || isDbNetworkError(eventBookingError)) {
           return res.status(503).json({
             success: false,
             message: 'Database service temporarily unavailable. Please try again in a moment.',
@@ -182,30 +133,106 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       return res.status(404).json({
         success: false,
+        message: 'Payment not found. The payment may not have been initiated or the checkout request ID is invalid.',
+        checkout_request_id: checkoutRequestId,
+        error: foundError.message,
+        code: foundError.code,
+      });
+    }
+
+    if (!foundPayment) {
+      const { data: tshirtBooking, error: tshirtBookingError } = await supabase
+        .from('tshirt_bookings')
+        .select('payment_status, mpesa_checkout_request_id, id')
+        .eq('mpesa_checkout_request_id', checkoutRequestId)
+        .single();
+
+      if (tshirtBooking) {
+        return res.json({
+          success: true,
+          status: tshirtBooking.payment_status,
+          checkout_request_id: checkoutRequestId,
+          booking_id: tshirtBooking.id,
+          payment_type: 'tshirt',
+        });
+      }
+
+      const { data: eventBooking, error: eventBookingError } = await supabase
+        .from('event_bookings')
+        .select('payment_status, mpesa_checkout_request_id, id')
+        .eq('mpesa_checkout_request_id', checkoutRequestId)
+        .single();
+
+      if (eventBooking) {
+        return res.json({
+          success: true,
+          status: eventBooking.payment_status,
+          checkout_request_id: checkoutRequestId,
+          booking_id: eventBooking.id,
+          payment_type: 'event',
+        });
+      }
+
+      if (isDbNetworkError(tshirtBookingError) || isDbNetworkError(eventBookingError)) {
+        return res.status(503).json({
+          success: false,
+          message: 'Database service temporarily unavailable. Please try again in a moment.',
+          checkout_request_id: checkoutRequestId,
+          error: 'Database connection failed',
+        });
+      }
+
+      return res.status(404).json({
+        success: false,
         message: 'Payment not found in pending payments or bookings',
         checkout_request_id: checkoutRequestId,
       });
     }
-    
-    console.log('✅ Found pending payment with status:', pendingPayment.payment_status);
-    console.log('📤 Returning payment status response:', {
-      success: true,
-      status: pendingPayment.payment_status || 'pending',
-      error_code: pendingPayment.error_code || null,
-      error_message: pendingPayment.error_message || null,
-      checkout_request_id: checkoutRequestId,
-    });
 
-    // Return payment status
+    let bookingId: string | null = null;
+    let finalStatus = foundPayment.payment_status || 'pending';
+
+    if (foundPayment.payment_status === 'paid' && foundPayment.booking_id) {
+      bookingId = foundPayment.booking_id;
+    } else if (foundPayment.payment_status === 'paid') {
+      if (isTShirtPayment) {
+        const { data: tshirtBooking } = await supabase
+          .from('tshirt_bookings')
+          .select('id, payment_status')
+          .eq('mpesa_checkout_request_id', checkoutRequestId)
+          .eq('payment_status', 'paid')
+          .maybeSingle();
+
+        if (tshirtBooking) {
+          bookingId = tshirtBooking.id;
+          finalStatus = 'paid';
+        }
+      } else {
+        const { data: eventBooking } = await supabase
+          .from('event_bookings')
+          .select('id, payment_status')
+          .eq('mpesa_checkout_request_id', checkoutRequestId)
+          .eq('payment_status', 'paid')
+          .maybeSingle();
+
+        if (eventBooking) {
+          bookingId = eventBooking.id;
+          finalStatus = 'paid';
+        }
+      }
+    }
+
     return res.json({
       success: true,
-      status: pendingPayment.payment_status || 'pending',
-      error_code: pendingPayment.error_code || null,
-      error_message: pendingPayment.error_message || null,
+      status: finalStatus,
+      error_code: foundPayment.error_code || null,
+      error_message: foundPayment.error_message || null,
       checkout_request_id: checkoutRequestId,
+      booking_id: bookingId,
+      payment_type: isTShirtPayment ? 'tshirt' : 'event',
     });
   } catch (error: any) {
-    console.error('❌ Get payment status error:', error);
+    console.error('Get payment status error:', error);
     return res.status(500).json({
       success: false,
       message: 'Internal server error',
@@ -213,4 +240,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 }
-
