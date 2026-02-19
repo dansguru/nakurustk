@@ -18,6 +18,28 @@ function dlog(message: string, data?: Record<string, unknown>) {
 let cachedToken: string | null = null;
 let tokenExpiry = 0;
 
+function normalizePhone(phone: string): string {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.startsWith('254') && digits.length === 12) return digits;
+  if (digits.startsWith('0') && digits.length === 10) return `254${digits.slice(1)}`;
+  return digits;
+}
+
+function sanitizeAccountReference(value: string): string {
+  const cleaned = String(value || '')
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 12);
+  return cleaned || 'PAYMENT';
+}
+
+function sanitizeTransactionDesc(value: string, fallback: string): string {
+  const cleaned = String(value || fallback || '')
+    .replace(/[^a-zA-Z0-9 .,_-]/g, '')
+    .trim()
+    .slice(0, 40);
+  return cleaned || fallback;
+}
+
 async function getAccessToken(): Promise<string> {
   if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
 
@@ -159,12 +181,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? `TSHIRT-${String(tshirt_id || variant_id || '').substring(0, 8)}`
         : `EVENT-${String(event_id).substring(0, 8)}`);
 
+    const normalizedPhone = normalizePhone(phone_number);
+    if (!/^254(7|1)\d{8}$/.test(normalizedPhone)) {
+      dlog('Invalid phone after normalization', { inputPhone: phone_number || null, normalizedPhone });
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid phone format. Use 07XXXXXXXX or 2547XXXXXXXX.',
+      });
+    }
+
+    const safeReference = sanitizeAccountReference(reference);
+    const safeDesc = sanitizeTransactionDesc(
+      transaction_desc || (isTShirtPayment ? 'T-shirt purchase payment' : 'Event booking payment'),
+      isTShirtPayment ? 'TShirt Payment' : 'Event Payment'
+    );
+
     dlog('Calling Safaricom STK push', { paymentType: isTShirtPayment ? 'tshirt' : 'event', reference });
     const mpesaResponse = await initiateSTKPush({
-      phone_number,
+      phone_number: normalizedPhone,
       amount,
-      account_reference: reference,
-      transaction_desc: transaction_desc || (isTShirtPayment ? 'T-shirt purchase payment' : 'Event booking payment'),
+      account_reference: safeReference,
+      transaction_desc: safeDesc,
     });
     dlog('Safaricom STK response', {
       responseCode: mpesaResponse?.ResponseCode || null,
