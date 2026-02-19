@@ -27,18 +27,20 @@ function extractCheckoutRequestId(url?: string): string | undefined {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const requestOrigin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
-  if (!isAllowedRequestOrigin(requestOrigin)) {
-    return res.status(403).json({ success: false, message: 'Forbidden origin' });
-  }
-
   res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
-  res.setHeader('Vary', 'Origin');
+  if (ALLOWED_ORIGIN !== '*') {
+    res.setHeader('Vary', 'Origin');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Access-Control-Max-Age', '86400');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
+
+  const requestOrigin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
+  if (!isAllowedRequestOrigin(requestOrigin)) {
+    return res.status(403).json({ success: false, message: 'Forbidden origin' });
+  }
   if (req.method !== 'GET') return res.status(405).json({ success: false, message: 'Method not allowed' });
 
   try {
