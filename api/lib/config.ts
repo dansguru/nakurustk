@@ -30,4 +30,13 @@ export const MPESA_CONFIG = {
   baseUrl: process.env.MPESA_BASE_URL || 'https://api.safaricom.co.ke',
 };
 
-export const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*';
+function normalizeOrigin(value: string): string {
+  return value.trim().replace(/\/+$/, '');
+}
+
+export const ALLOWED_ORIGIN = normalizeOrigin(requireEnv('ALLOWED_ORIGIN'));
+
+export function isAllowedRequestOrigin(origin?: string): boolean {
+  if (typeof origin !== 'string' || origin.trim() === '') return false;
+  return normalizeOrigin(origin) === ALLOWED_ORIGIN;
+}

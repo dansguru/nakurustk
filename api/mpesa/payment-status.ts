@@ -1,6 +1,6 @@
 // @ts-ignore - Vercel types
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { ALLOWED_ORIGIN } from '../lib/config';
+import { ALLOWED_ORIGIN, isAllowedRequestOrigin } from '../lib/config';
 import { supabase } from '../lib/supabase';
 
 export const config = {
@@ -27,7 +27,13 @@ function extractCheckoutRequestId(url?: string): string | undefined {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const requestOrigin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
+  if (!isAllowedRequestOrigin(requestOrigin)) {
+    return res.status(403).json({ success: false, message: 'Forbidden origin' });
+  }
+
   res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+  res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Access-Control-Max-Age', '86400');
