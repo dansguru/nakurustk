@@ -8,6 +8,13 @@ export const config = {
   runtime: 'nodejs',
 };
 
+// TEMP_DEBUG_REMOVE_AFTER_FIX
+const MPESA_DEBUG_LOGS = ['1', 'true', 'yes', 'on'].includes(String(process.env.MPESA_DEBUG_LOGS || '').toLowerCase());
+function dlog(message: string, data?: Record<string, unknown>) {
+  if (!MPESA_DEBUG_LOGS) return;
+  console.log(`[MPESA][stk-push] ${message}`, data || {});
+}
+
 let cachedToken: string | null = null;
 let tokenExpiry = 0;
 
@@ -75,6 +82,7 @@ function parseVariant(variant?: string): { color: string; size: string } {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  dlog('Incoming request', { method: req.method, url: req.url, origin: req.headers.origin || null });
   res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
   if (ALLOWED_ORIGIN !== '*') {
     res.setHeader('Vary', 'Origin');
@@ -83,10 +91,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Access-Control-Max-Age', '86400');
 
-  if (req.method === 'OPTIONS') return res.status(200).json({ message: 'OK' });
+  if (req.method === 'OPTIONS') {
+    dlog('Preflight accepted');
+    return res.status(200).json({ message: 'OK' });
+  }
 
   const requestOrigin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
   if (!isAllowedRequestOrigin(requestOrigin)) {
+    dlog('Forbidden origin', { requestOrigin: requestOrigin || null, allowedOrigin: ALLOWED_ORIGIN });
     return res.status(403).json({ success: false, message: 'Forbidden origin' });
   }
   if (req.method !== 'POST') return res.status(405).json({ success: false, message: 'Method not allowed' });
@@ -114,17 +126,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } = req.body || {};
 
     const isTShirtPayment = payment_type === 'tshirt';
+    dlog('Parsed payload', {
+      paymentType: isTShirtPayment ? 'tshirt' : 'event',
+      hasEventId: Boolean(event_id),
+      hasTshirtId: Boolean(tshirt_id || variant_id),
+      hasUserId: Boolean(user_id),
+      hasPhone: Boolean(phone_number),
+      amount: amount ?? null,
+      quantity: quantity ?? null,
+    });
 
     if (isTShirtPayment) {
       const actualTshirtId = (tshirt_id || variant_id || '').toString().trim();
       const invalidTshirtId = !actualTshirtId || actualTshirtId === 'null' || actualTshirtId === 'undefined' || actualTshirtId.length < 10;
       if (invalidTshirtId || !user_id || !phone_number || !amount || amount <= 0) {
+        dlog('Validation failed for tshirt payment', { invalidTshirtId, hasUserId: Boolean(user_id), hasPhone: Boolean(phone_number), amount: amount ?? null });
         return res.status(400).json({
           success: false,
           message: 'Missing required fields for T-shirt payment: tshirt_id (or variant_id), user_id, phone_number, amount',
         });
       }
     } else if (!event_id || !user_id || !phone_number || !amount || amount <= 0) {
+      dlog('Validation failed for event payment', { hasEventId: Boolean(event_id), hasUserId: Boolean(user_id), hasPhone: Boolean(phone_number), amount: amount ?? null });
       return res.status(400).json({
         success: false,
         message: 'Missing required fields for event payment: event_id, user_id, phone_number, amount',
@@ -136,11 +159,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? `TSHIRT-${String(tshirt_id || variant_id || '').substring(0, 8)}`
         : `EVENT-${String(event_id).substring(0, 8)}`);
 
+    dlog('Calling Safaricom STK push', { paymentType: isTShirtPayment ? 'tshirt' : 'event', reference });
     const mpesaResponse = await initiateSTKPush({
       phone_number,
       amount,
       account_reference: reference,
       transaction_desc: transaction_desc || (isTShirtPayment ? 'T-shirt purchase payment' : 'Event booking payment'),
+    });
+    dlog('Safaricom STK response', {
+      responseCode: mpesaResponse?.ResponseCode || null,
+      responseDescription: mpesaResponse?.ResponseDescription || null,
+      checkoutRequestId: mpesaResponse?.CheckoutRequestID || null,
+      merchantRequestId: mpesaResponse?.MerchantRequestID || null,
     });
 
     if (mpesaResponse.ResponseCode !== '0' || !mpesaResponse.CheckoutRequestID) {
@@ -184,6 +214,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
 
       if (insertResult.error) {
+        dlog('DB insert failed: pending_tshirt_payments', { code: insertResult.error.code || null, message: insertResult.error.message || null });
         if (insertResult.error.code === '23503') {
           return res.status(400).json({
             success: false,
@@ -196,6 +227,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           message: 'Failed to create T-shirt payment record',
         });
       }
+      dlog('DB insert success: pending_tshirt_payments', { checkoutRequestId });
     } else {
       const insertResult = await supabase
         .from('pending_payments')
@@ -215,13 +247,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
 
       if (insertResult.error) {
+        dlog('DB insert failed: pending_payments', { code: insertResult.error.code || null, message: insertResult.error.message || null });
         return res.status(500).json({
           success: false,
           message: 'Failed to create event payment record',
         });
       }
+      dlog('DB insert success: pending_payments', { checkoutRequestId, eventId: event_id || null });
     }
 
+    dlog('STK push flow success', { checkoutRequestId, paymentType: isTShirtPayment ? 'tshirt' : 'event' });
     return res.json({
       success: true,
       message: 'STK Push sent successfully',
@@ -234,6 +269,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const errorMessage = axios.isAxiosError(error)
       ? error.response?.data?.errorMessage || error.response?.data?.ResponseDescription || error.message
       : error?.message || 'Unknown error';
+    dlog('STK push flow failure', {
+      errorMessage,
+      axiosStatus: axios.isAxiosError(error) ? error.response?.status || null : null,
+      axiosData: axios.isAxiosError(error) ? error.response?.data || null : null,
+    });
     console.error('STK push failed:', errorMessage);
     return res.status(500).json({
       success: false,

@@ -6,6 +6,13 @@ export const config = {
   runtime: 'nodejs',
 };
 
+// TEMP_DEBUG_REMOVE_AFTER_FIX
+const MPESA_DEBUG_LOGS = ['1', 'true', 'yes', 'on'].includes(String(process.env.MPESA_DEBUG_LOGS || '').toLowerCase());
+function dlog(message: string, data?: Record<string, unknown>) {
+  if (!MPESA_DEBUG_LOGS) return;
+  console.log(`[MPESA][callback] ${message}`, data || {});
+}
+
 function isDbNetworkError(error: any): boolean {
   const message = error?.message || '';
   const details = error?.details || '';
@@ -204,17 +211,28 @@ async function handleEventSuccess(checkoutRequestId: string, pendingPayment: any
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  dlog('Incoming callback request', { method: req.method, url: req.url });
   if (req.method !== 'POST') {
     return res.status(405).json({ ResultCode: 1, ResultDesc: 'Method not allowed' });
   }
 
   try {
     const stkCallback = req.body?.Body?.stkCallback;
+    dlog('Parsed callback envelope', {
+      hasBody: Boolean(req.body),
+      hasStkCallback: Boolean(stkCallback),
+      callbackKeys: stkCallback ? Object.keys(stkCallback) : [],
+    });
     if (!stkCallback) {
       return res.json({ ResultCode: 0, ResultDesc: 'Success' });
     }
 
     const { CheckoutRequestID, ResultCode, ResultDesc } = stkCallback;
+    dlog('Callback core fields', {
+      checkoutRequestId: CheckoutRequestID || null,
+      resultCode: ResultCode ?? null,
+      resultDesc: ResultDesc || null,
+    });
     if (!CheckoutRequestID) {
       return res.json({ ResultCode: 0, ResultDesc: 'Success' });
     }
@@ -236,6 +254,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } catch {
       pendingTShirtPayment = null;
     }
+    dlog('Pending tshirt lookup', {
+      checkoutRequestId: CheckoutRequestID,
+      found: Boolean(pendingTShirtPayment),
+    });
 
     if (!pendingTShirtPayment) {
       try {
@@ -252,8 +274,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         isNetworkError = isDbNetworkError(error);
       }
     }
+    dlog('Pending event lookup', {
+      checkoutRequestId: CheckoutRequestID,
+      found: Boolean(pendingPayment),
+      hasError: Boolean(pendingPaymentError),
+      isNetworkError,
+    });
 
     if (ResultCode === 0) {
+      dlog('Successful callback result', {
+        checkoutRequestId: CheckoutRequestID,
+        paymentType: pendingTShirtPayment ? 'tshirt' : 'event',
+      });
       if (pendingTShirtPayment) {
         await handleTShirtSuccess(CheckoutRequestID, pendingTShirtPayment, receiptNumber, transactionDateIso);
         return res.json({ ResultCode: 0, ResultDesc: 'Success' });
@@ -264,6 +296,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const { errorType, errorMessage } = mapFailure(ResultCode, ResultDesc || 'Payment failed');
+    dlog('Failed callback mapped', {
+      checkoutRequestId: CheckoutRequestID,
+      resultCode: ResultCode ?? null,
+      errorType,
+      errorMessage,
+      paymentType: pendingTShirtPayment ? 'tshirt' : (pendingPayment ? 'event' : 'unknown'),
+    });
 
     if (pendingTShirtPayment) {
       await supabase
@@ -308,8 +347,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.warn('Pending payment lookup issue:', pendingPaymentError.message);
     }
 
+    dlog('Callback processing complete', { checkoutRequestId: CheckoutRequestID });
     return res.json({ ResultCode: 0, ResultDesc: 'Success' });
   } catch (error: any) {
+    dlog('Callback handler exception', { message: error?.message || null });
     console.error('Callback handler error:', error?.message || error);
     return res.json({ ResultCode: 0, ResultDesc: 'Success' });
   }

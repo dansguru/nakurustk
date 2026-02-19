@@ -7,6 +7,13 @@ export const config = {
   runtime: 'nodejs',
 };
 
+// TEMP_DEBUG_REMOVE_AFTER_FIX
+const MPESA_DEBUG_LOGS = ['1', 'true', 'yes', 'on'].includes(String(process.env.MPESA_DEBUG_LOGS || '').toLowerCase());
+function dlog(message: string, data?: Record<string, unknown>) {
+  if (!MPESA_DEBUG_LOGS) return;
+  console.log(`[MPESA][payment-status] ${message}`, data || {});
+}
+
 function isDbNetworkError(error: any): boolean {
   return (
     error?.message?.includes('fetch failed')
@@ -27,6 +34,7 @@ function extractCheckoutRequestId(url?: string): string | undefined {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  dlog('Incoming request', { method: req.method, url: req.url, origin: req.headers.origin || null });
   res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
   if (ALLOWED_ORIGIN !== '*') {
     res.setHeader('Vary', 'Origin');
@@ -35,16 +43,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Access-Control-Max-Age', '86400');
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method === 'OPTIONS') {
+    dlog('Preflight accepted');
+    return res.status(200).end();
+  }
 
   const requestOrigin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
   if (!isAllowedRequestOrigin(requestOrigin)) {
+    dlog('Forbidden origin', { requestOrigin: requestOrigin || null, allowedOrigin: ALLOWED_ORIGIN });
     return res.status(403).json({ success: false, message: 'Forbidden origin' });
   }
   if (req.method !== 'GET') return res.status(405).json({ success: false, message: 'Method not allowed' });
 
   try {
     const checkoutRequestId = extractCheckoutRequestId(req.url);
+    dlog('Extracted checkoutRequestId', { checkoutRequestId: checkoutRequestId || null });
     if (!checkoutRequestId || checkoutRequestId === 'payment-status') {
       return res.status(400).json({
         success: false,
@@ -71,6 +84,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       pendingPayment = eventPendingResult.data;
       pendingError = eventPendingResult.error;
     }
+    dlog('Pending lookup result', {
+      checkoutRequestId,
+      foundTshirtPending: Boolean(pendingTShirtPayment),
+      foundEventPending: Boolean(pendingPayment),
+      tshirtErrorCode: pendingTShirtError?.code || null,
+      eventErrorCode: pendingError?.code || null,
+    });
 
     let foundPayment: any = null;
     let foundError: any = null;
@@ -89,6 +109,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (foundError && !foundPayment) {
+      dlog('No pending record found', { checkoutRequestId, code: foundError?.code || null, message: foundError?.message || null });
       if (isDbNetworkError(foundError)) {
         return res.status(503).json({
           success: false,
@@ -106,6 +127,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .single();
 
         if (tshirtBooking) {
+          dlog('Found tshirt booking fallback', { checkoutRequestId, status: tshirtBooking.payment_status || null });
           return res.json({
             success: true,
             status: tshirtBooking.payment_status,
@@ -121,6 +143,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .single();
 
         if (eventBooking) {
+          dlog('Found event booking fallback', { checkoutRequestId, status: eventBooking.payment_status || null });
           return res.json({
             success: true,
             status: eventBooking.payment_status,
@@ -156,6 +179,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .single();
 
       if (tshirtBooking) {
+        dlog('Found tshirt booking in secondary fallback', { checkoutRequestId, status: tshirtBooking.payment_status || null, bookingId: tshirtBooking.id || null });
         return res.json({
           success: true,
           status: tshirtBooking.payment_status,
@@ -172,6 +196,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .single();
 
       if (eventBooking) {
+        dlog('Found event booking in secondary fallback', { checkoutRequestId, status: eventBooking.payment_status || null, bookingId: eventBooking.id || null });
         return res.json({
           success: true,
           status: eventBooking.payment_status,
@@ -240,6 +265,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       payment_type: isTShirtPayment ? 'tshirt' : 'event',
     });
   } catch (error: any) {
+    dlog('Unhandled failure', { message: error?.message || null });
     console.error('Get payment status error:', error);
     return res.status(500).json({
       success: false,
