@@ -7,11 +7,9 @@ export const config = {
   runtime: 'nodejs',
 };
 
-// TEMP_DEBUG_REMOVE_AFTER_FIX
-const MPESA_DEBUG_LOGS = ['1', 'true', 'yes', 'on'].includes(String(process.env.MPESA_DEBUG_LOGS || '').toLowerCase());
 function dlog(message: string, data?: Record<string, unknown>) {
-  if (!MPESA_DEBUG_LOGS) return;
-  console.log(`[MPESA][payment-status] ${message}`, data || {});
+  void message;
+  void data;
 }
 
 function isDbNetworkError(error: any): boolean {

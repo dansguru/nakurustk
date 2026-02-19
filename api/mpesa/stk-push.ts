@@ -8,11 +8,9 @@ export const config = {
   runtime: 'nodejs',
 };
 
-// TEMP_DEBUG_REMOVE_AFTER_FIX
-const MPESA_DEBUG_LOGS = ['1', 'true', 'yes', 'on'].includes(String(process.env.MPESA_DEBUG_LOGS || '').toLowerCase());
 function dlog(message: string, data?: Record<string, unknown>) {
-  if (!MPESA_DEBUG_LOGS) return;
-  console.log(`[MPESA][stk-push] ${message}`, data || {});
+  void message;
+  void data;
 }
 
 let cachedToken: string | null = null;
@@ -352,13 +350,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const errorMessage = axios.isAxiosError(error)
       ? error.response?.data?.errorMessage || error.response?.data?.ResponseDescription || error.message
       : error?.message || 'Unknown error';
-    if (axios.isAxiosError(error)) {
-      console.error('[MPESA][stk-push] Daraja error details:', {
-        status: error.response?.status || null,
-        statusText: error.response?.statusText || null,
-        data: error.response?.data || null,
-      });
-    }
     dlog('STK push flow failure', {
       errorMessage,
       axiosStatus: axios.isAxiosError(error) ? error.response?.status || null : null,
