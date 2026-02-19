@@ -217,13 +217,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const stkCallback = req.body?.Body?.stkCallback;
+    let parsedBody: any = req.body;
+    if (typeof parsedBody === 'string') {
+      try {
+        parsedBody = JSON.parse(parsedBody);
+      } catch {
+        parsedBody = {};
+      }
+    }
+
+    const stkCallback =
+      parsedBody?.Body?.stkCallback
+      || parsedBody?.stkCallback
+      || parsedBody?.body?.stkCallback
+      || null;
+
     dlog('Parsed callback envelope', {
-      hasBody: Boolean(req.body),
+      hasBody: Boolean(parsedBody),
       hasStkCallback: Boolean(stkCallback),
       callbackKeys: stkCallback ? Object.keys(stkCallback) : [],
     });
     if (!stkCallback) {
+      dlog('Callback payload missing stkCallback', {
+        topLevelKeys: parsedBody && typeof parsedBody === 'object' ? Object.keys(parsedBody) : [],
+      });
       return res.json({ ResultCode: 0, ResultDesc: 'Success' });
     }
 
