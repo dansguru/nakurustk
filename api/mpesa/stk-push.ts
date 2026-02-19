@@ -27,16 +27,17 @@ function normalizePhone(phone: string): string {
 
 function sanitizeAccountReference(value: string): string {
   const cleaned = String(value || '')
-    .replace(/[^a-zA-Z0-9_-]/g, '')
-    .slice(0, 12);
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .toUpperCase()
+    .slice(0, 10);
   return cleaned || 'PAYMENT';
 }
 
 function sanitizeTransactionDesc(value: string, fallback: string): string {
   const cleaned = String(value || fallback || '')
-    .replace(/[^a-zA-Z0-9 .,_-]/g, '')
+    .replace(/[^a-zA-Z0-9 ]/g, '')
     .trim()
-    .slice(0, 40);
+    .slice(0, 20);
   return cleaned || fallback;
 }
 
