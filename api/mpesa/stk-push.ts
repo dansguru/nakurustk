@@ -71,7 +71,7 @@ async function initiateSTKPush(data: {
     BusinessShortCode: MPESA_CONFIG.shortcode,
     Password: password,
     Timestamp: timestamp,
-    TransactionType: 'CustomerPayBillOnline',
+    TransactionType: process.env.MPESA_TRANSACTION_TYPE || 'CustomerPayBillOnline',
     Amount: Math.ceil(data.amount),
     PartyA: data.phone_number,
     PartyB: MPESA_CONFIG.shortcode,
@@ -196,7 +196,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       isTShirtPayment ? 'TShirt Payment' : 'Event Payment'
     );
 
-    dlog('Calling Safaricom STK push', { paymentType: isTShirtPayment ? 'tshirt' : 'event', reference });
+    dlog('Calling Safaricom STK push', {
+      paymentType: isTShirtPayment ? 'tshirt' : 'event',
+      reference,
+      normalizedPhone,
+      amount,
+      transactionType: process.env.MPESA_TRANSACTION_TYPE || 'CustomerPayBillOnline',
+      callbackUrl: MPESA_CONFIG.callbackUrl,
+    });
     const mpesaResponse = await initiateSTKPush({
       phone_number: normalizedPhone,
       amount,
@@ -306,6 +313,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const errorMessage = axios.isAxiosError(error)
       ? error.response?.data?.errorMessage || error.response?.data?.ResponseDescription || error.message
       : error?.message || 'Unknown error';
+    if (axios.isAxiosError(error)) {
+      console.error('[MPESA][stk-push] Daraja error details:', {
+        status: error.response?.status || null,
+        statusText: error.response?.statusText || null,
+        data: error.response?.data || null,
+      });
+    }
     dlog('STK push flow failure', {
       errorMessage,
       axiosStatus: axios.isAxiosError(error) ? error.response?.status || null : null,
