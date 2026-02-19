@@ -259,7 +259,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
 
       if (insertResult.error) {
-        dlog('DB insert failed: pending_tshirt_payments', { code: insertResult.error.code || null, message: insertResult.error.message || null });
+        dlog('DB insert failed: pending_tshirt_payments', {
+          code: insertResult.error.code || null,
+          message: insertResult.error.message || null,
+          details: (insertResult.error as any).details || null,
+          hint: (insertResult.error as any).hint || null,
+        });
         if (insertResult.error.code === '23503') {
           return res.status(400).json({
             success: false,
@@ -270,6 +275,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(500).json({
           success: false,
           message: 'Failed to create T-shirt payment record',
+          error: {
+            code: insertResult.error.code || null,
+            message: insertResult.error.message || null,
+            details: (insertResult.error as any).details || null,
+            hint: (insertResult.error as any).hint || null,
+          },
         });
       }
       dlog('DB insert success: pending_tshirt_payments', { checkoutRequestId });
@@ -292,10 +303,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
 
       if (insertResult.error) {
-        dlog('DB insert failed: pending_payments', { code: insertResult.error.code || null, message: insertResult.error.message || null });
+        dlog('DB insert failed: pending_payments', {
+          code: insertResult.error.code || null,
+          message: insertResult.error.message || null,
+          details: (insertResult.error as any).details || null,
+          hint: (insertResult.error as any).hint || null,
+          eventId: event_id || null,
+          userId: user_id || null,
+          ticketType: ticket_type || 'Regular',
+        });
+        if (insertResult.error.code === '23503') {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid event reference. The selected event may not exist.',
+            code: 'EVENT_NOT_FOUND',
+            error: {
+              code: insertResult.error.code || null,
+              message: insertResult.error.message || null,
+              details: (insertResult.error as any).details || null,
+              hint: (insertResult.error as any).hint || null,
+            },
+          });
+        }
         return res.status(500).json({
           success: false,
           message: 'Failed to create event payment record',
+          error: {
+            code: insertResult.error.code || null,
+            message: insertResult.error.message || null,
+            details: (insertResult.error as any).details || null,
+            hint: (insertResult.error as any).hint || null,
+          },
         });
       }
       dlog('DB insert success: pending_payments', { checkoutRequestId, eventId: event_id || null });
